@@ -1,0 +1,71 @@
+name: Android APK
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Keeps the same signing key between runs so new APKs install over old ones.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: vox-debug-keystore
+
+      - name: Chave de assinatura privada (opcional)
+        env:
+          KEYSTORE_B64: ${{ secrets.VOX_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/vox.keystore"
+            echo "VOX_KEYSTORE=$RUNNER_TEMP/vox.keystore" >> "$GITHUB_ENV"
+          fi
+
+      - name: Testes e APK
+        env:
+          VOX_KEYSTORE_PASSWORD: ${{ secrets.VOX_KEYSTORE_PASSWORD }}
+          VOX_KEY_ALIAS: ${{ secrets.VOX_KEY_ALIAS }}
+          VOX_KEY_PASSWORD: ${{ secrets.VOX_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon testReleaseUnitTest assembleRelease
+
+      - name: Renomear APK
+        run: cp app/build/outputs/apk/release/app-release.apk Vox.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Vox-apk
+          path: Vox.apk
+
+      - name: Publicar release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Vox 1.0.${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          make_latest: "true"
+          files: Vox.apk
+          body: |
+            Para instalar: abra esta página no celular, toque em **Vox.apk** e depois em "Instalar".
+            Se o Android pedir, permita instalar apps desta fonte (o navegador ou o gerenciador de arquivos).
+            Versões novas instalam por cima da anterior, mantendo suas músicas.
