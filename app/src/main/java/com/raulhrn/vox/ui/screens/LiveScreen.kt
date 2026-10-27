@@ -77,6 +77,8 @@ private fun LiveContent() {
         var lastFrame = MicEngine.frames
         var lastInfo = 0L
         var lastDraw = 0L
+        var lastNote = -1
+        var smoothCents = 0f
         while (true) {
             withFrameMillis { now ->
                 val f = MicEngine.frames
@@ -87,8 +89,15 @@ private fun LiveContent() {
                     i++
                 }
                 lastFrame = f
+                // Smooth the meter (~120 ms) so a natural vibrato does not make it jump around.
+                if (follower.note != lastNote) {
+                    lastNote = follower.note
+                    smoothCents = follower.cents
+                } else {
+                    smoothCents += (follower.cents - smoothCents) * 0.12f
+                }
                 note = follower.note
-                cents.floatValue = follower.cents
+                cents.floatValue = smoothCents
                 recentVersion = follower.version
                 level.floatValue = MicEngine.latestLevel()
                 error = MicEngine.error
@@ -97,8 +106,8 @@ private fun LiveContent() {
                     info = if (follower.note < 0) {
                         ""
                     } else {
-                        val hz = Pitch.midiToHz(follower.note + follower.cents / 100f, Prefs.a4)
-                        val cc = follower.cents.roundToInt()
+                        val hz = Pitch.midiToHz(follower.note + smoothCents / 100f, Prefs.a4)
+                        val cc = smoothCents.roundToInt()
                         val tuning = if (abs(cc) <= 5) "afinado" else (if (cc > 0) "+$cc" else "$cc") + " cents"
                         String.format(Locale("pt", "BR"), "%.1f Hz  ·  %s", hz, tuning)
                     }
