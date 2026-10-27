@@ -2,9 +2,13 @@ package com.raulhrn.vox.ui
 
 import android.graphics.Paint
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -17,11 +21,14 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.raulhrn.vox.audio.MicEngine
 import com.raulhrn.vox.core.Naming
 import com.raulhrn.vox.core.NoteNames
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
@@ -143,12 +150,47 @@ fun PianoRoll(
     windowMs: Float = 6000f,
     playhead: Float = 0.3f,
     accuracy: ((Int) -> Float)? = null,
+    selected: Int = -1,
+    onTap: ((timeMs: Float, midi: Float) -> Unit)? = null,
+    onScrub: ((deltaMs: Float) -> Unit)? = null,
 ) {
     val c = Vox.colors
     val paint = remember { Paint(Paint.ANTI_ALIAS_FLAG) }
     val range = remember { RangeFollower() }
     val path = remember { Path() }
-    Canvas(modifier) {
+    // Gesture handlers outlive recompositions (a drag must not restart), so read the latest lambdas.
+    val currentClock by rememberUpdatedState(clock)
+    val currentTap by rememberUpdatedState(onTap)
+    val currentScrub by rememberUpdatedState(onScrub)
+    val gestures = if (onTap == null && onScrub == null) {
+        Modifier
+    } else {
+        Modifier.pointerInput(onTap != null, onScrub != null, windowMs, playhead) {
+            coroutineScope {
+                if (onTap != null) {
+                    launch {
+                        detectTapGestures { pos ->
+                            if (range.lo.isNaN()) return@detectTapGestures
+                            val w = size.width.toFloat()
+                            val h = size.height.toFloat()
+                            val time = currentClock() + (pos.x - w * playhead) / w * windowMs
+                            val midi = range.lo + (h - pos.y) / h * (range.hi - range.lo)
+                            currentTap?.invoke(time, midi)
+                        }
+                    }
+                }
+                if (onScrub != null) {
+                    launch {
+                        detectHorizontalDragGestures { change, dx ->
+                            change.consume()
+                            currentScrub?.invoke(-dx / size.width * windowMs)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Canvas(modifier.then(gestures)) {
         tick.value // redraw on every frame tick
         val t = clock()
         val w = size.width
@@ -182,7 +224,7 @@ fun PianoRoll(
         val rLo = range.lo
         val span = range.hi - range.lo
         val rowH = h / span
-        val barH = max(6.dp.toPx(), rowH * 0.6f)
+        val barH = (rowH * 0.5f).coerceIn(6.dp.toPx(), 14.dp.toPx())
 
         for (n in notes) {
             val x0 = px + (n.startMs - t) / windowMs * w
@@ -207,6 +249,20 @@ fun PianoRoll(
                 topLeft = Offset(x0, y - barH / 2f),
                 size = Size(max(3f, x1 - x0), barH),
                 cornerRadius = CornerRadius(barH / 2f),
+            )
+        }
+        if (selected in notes.indices) {
+            val n = notes[selected]
+            val x0 = px + (n.startMs - t) / windowMs * w
+            val x1 = px + (n.startMs + n.durMs - t) / windowMs * w
+            val y = h - (n.midi - rLo) / span * h
+            val pad = 3.dp.toPx()
+            drawRoundRect(
+                c.text,
+                topLeft = Offset(x0 - pad, y - barH / 2f - pad),
+                size = Size(max(3f, x1 - x0) + 2 * pad, barH + 2 * pad),
+                cornerRadius = CornerRadius(barH / 2f + pad),
+                style = Stroke(width = 2.dp.toPx()),
             )
         }
 

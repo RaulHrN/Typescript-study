@@ -283,7 +283,7 @@ private fun BreathContent(ex: Exercise) {
     var phaseName by remember { mutableStateOf("Pronto?") }
     var seconds by remember { mutableIntStateOf(0) }
     var feedback by remember { mutableStateOf("") }
-    val progress = remember { mutableFloatStateOf(0.15f) }
+    val progress = remember { mutableFloatStateOf(MIN_BREATH) }
     val level = remember { mutableFloatStateOf(-100f) }
 
     MicActive(enabled = running)
@@ -303,7 +303,7 @@ private fun BreathContent(ex: Exercise) {
                         e < 4_000 -> {
                             phaseName = "Inspire"
                             seconds = 4 - (e / 1000).toInt()
-                            progress.floatValue = 0.15f + 0.85f * e / 4000f
+                            progress.floatValue = MIN_BREATH + (1f - MIN_BREATH) * e / 4000f
                             exhale.clear()
                         }
                         e < 8_000 -> {
@@ -314,7 +314,7 @@ private fun BreathContent(ex: Exercise) {
                         e < 16_000 -> {
                             phaseName = "Solte em \"sss\""
                             seconds = 8 - ((e - 8000) / 1000).toInt()
-                            progress.floatValue = 1f - 0.85f * (e - 8000) / 8000f
+                            progress.floatValue = 1f - (1f - MIN_BREATH) * (e - 8000) / 8000f
                             val f = MicEngine.frames
                             var i = max(lastFrame, f - 64)
                             while (i < f) {
@@ -350,7 +350,7 @@ private fun BreathContent(ex: Exercise) {
             Canvas(Modifier.fillMaxSize()) {
                 val r = size.minDimension / 2f * 0.9f
                 drawCircle(c.line, radius = r, style = Stroke(width = 1.dp.toPx()))
-                drawCircle(c.accent.copy(alpha = 0.18f), radius = r * progress.floatValue)
+                drawCircle(c.accent.copy(alpha = 0.12f), radius = r * progress.floatValue)
                 drawCircle(c.accent, radius = r * progress.floatValue, style = Stroke(width = 2.dp.toPx()), center = Offset(size.width / 2f, size.height / 2f))
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -389,13 +389,15 @@ private fun BreathContent(ex: Exercise) {
                     cycle = 0
                     feedback = ""
                     phaseName = "Pronto?"
-                    progress.floatValue = 0.15f
+                    progress.floatValue = MIN_BREATH
                 }
                 .padding(8.dp),
         )
         Spacer(Modifier.height(8.dp))
     }
 }
+
+private const val MIN_BREATH = 0.42f
 
 /** Judges how even the "sss" was from the spread of the input level. */
 private fun steadiness(levels: FloatList): String {

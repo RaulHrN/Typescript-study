@@ -1,6 +1,7 @@
 package com.raulhrn.vox.ui.screens
 
 import android.net.Uri
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -39,6 +40,7 @@ import com.raulhrn.vox.audio.SynthTrack
 import com.raulhrn.vox.core.Harmony
 import com.raulhrn.vox.core.HarmonyMode
 import com.raulhrn.vox.core.Key
+import com.raulhrn.vox.core.NoteEvent
 import com.raulhrn.vox.core.NoteNames
 import com.raulhrn.vox.core.Phrases
 import com.raulhrn.vox.core.Role
@@ -68,6 +70,7 @@ import com.raulhrn.vox.ui.VoxIcons
 import com.raulhrn.vox.ui.VoxType
 import com.raulhrn.vox.ui.formatTime
 import kotlinx.coroutines.delay
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -147,6 +150,8 @@ private fun PracticeContent(nav: Nav, song: Song) {
     var showHelp by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     var accuracy by remember { mutableIntStateOf(-1) }
+    var editing by remember { mutableStateOf(false) }
+    var selected by remember { mutableIntStateOf(-1) }
     val trace = remember { Trace() }
     val tick = remember { mutableLongStateOf(0L) }
 
@@ -197,6 +202,41 @@ private fun PracticeContent(nav: Nav, song: Song) {
             sliderPos = t
             trace.clear()
         }
+    }
+
+    fun pickNote(t: Float, m: Float) {
+        var best = -1
+        var bestScore = Float.MAX_VALUE
+        song.notes.forEachIndexed { i, n ->
+            val dt = when {
+                t < n.startMs -> n.startMs - t
+                t > n.endMs -> t - n.endMs
+                else -> 0f
+            }
+            val score = dt / 150f + abs(n.midi - m)
+            if (score < bestScore) {
+                bestScore = score
+                best = i
+            }
+        }
+        selected = if (bestScore < 4f) best else -1
+        if (selected >= 0) synth.preview(song.notes[selected].midi)
+    }
+
+    fun editSelected(op: (NoteEvent) -> NoteEvent?) {
+        val saved = SongStore.find(song.id) ?: return
+        val i = selected
+        if (i !in saved.notes.indices) return
+        val list = saved.notes.toMutableList()
+        val changed = op(list[i])
+        if (changed == null) {
+            list.removeAt(i)
+            selected = -1
+        } else {
+            list[i] = changed
+            synth.preview(changed.midi)
+        }
+        SongStore.upsert(saved.copy(notes = list))
     }
 
     fun goToPhrase(i: Int) {
@@ -287,7 +327,7 @@ private fun PracticeContent(nav: Nav, song: Song) {
         }
 
         if (showSettings) {
-            Column(Modifier.heightIn(max = 340.dp).verticalScroll(rememberScrollState())) {
+            Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
                 Text("TOM DA MÚSICA", style = VoxType.caps, color = c.muted)
                 Spacer(Modifier.height(6.dp))
                 ChoiceGrid(
@@ -310,7 +350,7 @@ private fun PracticeContent(nav: Nav, song: Song) {
                 Spacer(Modifier.height(6.dp))
                 ChoiceGrid(
                     HarmonyMode.entries.toList(),
-                    columns = 2,
+                    columns = 4,
                     selected = { it == mode },
                     label = { it.label },
                     onSelect = { mode = it },
@@ -320,7 +360,16 @@ private fun PracticeContent(nav: Nav, song: Song) {
                     if (octave > 0) "+$octave" else "$octave",
                     { octave = (octave - 1).coerceAtLeast(-2) },
                     { octave = (octave + 1).coerceAtMost(2) },
-                    detail = "Ajuste para caber na sua voz",
+                )
+                VoxButton(
+                    "Corrigir notas da melodia",
+                    {
+                        if (playing) pause()
+                        editing = true
+                        showSettings = false
+                    },
+                    Modifier.fillMaxWidth(),
+                    primary = false,
                 )
                 Spacer(Modifier.height(8.dp))
             }
@@ -336,7 +385,47 @@ private fun PracticeContent(nav: Nav, song: Song) {
             flats = key.prefersFlats,
             windowMs = 6000f,
             accuracy = { scorer.noteAccuracy(it) },
+            selected = if (editing) selected else -1,
+            onTap = if (editing) ({ t, m -> pickNote(t, m) }) else null,
+            onScrub = if (!playing) ({ d -> seek(pausedAt.floatValue + d) }) else null,
         )
+
+        if (editing) {
+            Spacer(Modifier.height(8.dp))
+            Panel {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val n = song.notes.getOrNull(selected)
+                    Text(
+                        if (n == null) "Toque numa nota da melodia" else "${NoteNames.full(n.midi, naming, key.prefersFlats)} · ${formatTime(n.startMs.toFloat())}",
+                        style = VoxType.label,
+                        color = c.text,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        "concluir",
+                        style = VoxType.label,
+                        color = c.accent,
+                        modifier = Modifier
+                            .clickable {
+                                editing = false
+                                selected = -1
+                                synth.stop()
+                            }
+                            .padding(6.dp),
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                ChoiceGrid(
+                    EDITS,
+                    columns = EDITS.size,
+                    selected = { false },
+                    label = { it.first },
+                    onSelect = { e -> editSelected(e.second) },
+                )
+                Spacer(Modifier.height(4.dp))
+                Text("Arraste a faixa para os lados para andar pela música.", style = VoxType.small, color = c.muted)
+            }
+        }
 
         Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -428,6 +517,14 @@ private fun PracticeContent(nav: Nav, song: Song) {
         Spacer(Modifier.height(10.dp))
     }
 }
+
+private val EDITS: List<Pair<String, (NoteEvent) -> NoteEvent?>> = listOf(
+    "8ª↓" to { n -> n.copy(midi = n.midi - 12) },
+    "−1" to { n -> n.copy(midi = n.midi - 1) },
+    "+1" to { n -> n.copy(midi = n.midi + 1) },
+    "8ª↑" to { n -> n.copy(midi = n.midi + 12) },
+    "Apagar" to { _ -> null },
+)
 
 private val HELP = listOf(
     "Ouça com \"Melodia\" ligada até conhecer bem a linha principal.",

@@ -65,10 +65,16 @@ class Synth {
     /** Current position in song time (ms). */
     fun positionMs(): Float = worker?.positionMs() ?: lastPosition
 
-    fun start(tracks: List<SynthTrack>, fromMs: Float, speed: Float = 1f) {
+    /** Plays [tracks] from [fromMs]; the stream ends by itself after [untilMs] (song time). */
+    fun start(tracks: List<SynthTrack>, fromMs: Float, speed: Float = 1f, untilMs: Float = Float.MAX_VALUE) {
         stop()
         lastPosition = fromMs
-        worker = Worker(tracks, fromMs, speed).also { it.start() }
+        worker = Worker(tracks, fromMs, speed, untilMs).also { it.start() }
+    }
+
+    /** Short preview of a single note. */
+    fun preview(midi: Int) {
+        start(listOf(SynthTrack.of(listOf(NoteEvent(0, 450, midi)), gain = 0.3f)), 0f, untilMs = 700f)
     }
 
     fun stop() {
@@ -82,6 +88,7 @@ class Synth {
         private val tracks: List<SynthTrack>,
         private val fromMs: Float,
         private val speed: Float,
+        private val untilMs: Float,
     ) : Thread("vox-synth") {
         @Volatile
         var alive = true
@@ -135,6 +142,7 @@ class Synth {
                 while (alive) {
                     mix.fill(0f)
                     val t0 = fromMs + frame * msPerFrame
+                    if (t0 > untilMs) break
                     for (tr in tracks) if (tr.enabled) render(tr, t0, msPerFrame, mix)
                     for (i in 0 until block) {
                         val v = mix[i].coerceIn(-1f, 1f)

@@ -90,14 +90,24 @@ fun VoxButton(
         modifier
             .heightIn(min = 48.dp)
             .clip(shape)
-            .then(if (primary) Modifier.background(c.accent) else Modifier.border(1.dp, c.line, shape))
+            .then(
+                when {
+                    primary && enabled -> Modifier.background(c.accent)
+                    primary -> Modifier.background(c.surface2)
+                    else -> Modifier.border(1.dp, c.line, shape)
+                },
+            )
             .clickable(enabled = enabled, onClick = onClick)
-            .alpha(if (enabled) 1f else 0.4f)
+            .alpha(if (enabled || primary) 1f else 0.4f)
             .padding(horizontal = 18.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {
-        val fg = if (primary) c.onAccent else c.text
+        val fg = when {
+            primary && enabled -> c.onAccent
+            primary -> c.muted
+            else -> c.text
+        }
         if (icon != null) {
             Icon(icon, null, tint = fg, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(8.dp))
