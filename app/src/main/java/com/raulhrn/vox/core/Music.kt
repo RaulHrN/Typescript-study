@@ -82,6 +82,13 @@ enum class VoiceType(val label: String, val low: Int, val high: Int) {
     MEZZO("Mezzo-soprano", 57, 81),
     SOPRANO("Soprano", 60, 84);
 
+    val center: Int get() = (low + high) / 2
+
+    /** Typical comfortable range for parts written for this voice. */
+    val range: IntRange get() = low + 2..high - 2
+
+    val female: Boolean get() = this == CONTRALTO || this == MEZZO || this == SOPRANO
+
     companion object {
         /** Picks the type whose typical range is closest to the measured one. */
         fun classify(low: Int, high: Int): VoiceType = entries.minBy {

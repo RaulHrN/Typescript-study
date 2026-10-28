@@ -87,7 +87,7 @@ fun SettingsScreen(nav: Nav) {
 
             Section("Sobre")
             Text(
-                "Vox: afinador vocal, exercícios e segunda voz. Tudo roda no seu celular: o app não tem acesso à internet " +
+                "Cantorial: afinador vocal, exercícios, segunda voz e backing vocal. Tudo roda no seu celular: o app não tem acesso à internet " +
                     "e o som do microfone nunca é gravado nem enviado.",
                 style = VoxType.small,
                 color = c.muted,

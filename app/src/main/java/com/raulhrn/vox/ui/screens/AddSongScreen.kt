@@ -41,7 +41,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.raulhrn.vox.audio.FileAnalyzer
 import com.raulhrn.vox.audio.MicEngine
-import com.raulhrn.vox.audio.SongPlayer
+import com.raulhrn.vox.audio.StemPlayer
 import com.raulhrn.vox.core.FloatList
 import com.raulhrn.vox.core.Harmony
 import com.raulhrn.vox.core.HarmonyMode
@@ -99,6 +99,7 @@ fun AddSongScreen(nav: Nav) {
     var source by remember { mutableStateOf(Source.FILE) }
     var notes by remember { mutableStateOf<List<NoteEvent>?>(null) }
     var durationMs by remember { mutableIntStateOf(0) }
+    var voiced by remember { mutableStateOf<Float?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var progress by remember { mutableFloatStateOf(-1f) }
     var job by remember { mutableStateOf<Job?>(null) }
@@ -183,8 +184,8 @@ fun AddSongScreen(nav: Nav) {
             when (source) {
                 Source.FILE -> {
                     Text(
-                        "O app procura a voz principal. Funciona melhor com voz em destaque, a cappella ou voz e violão. " +
-                            "Em mixagens cheias a melodia pode sair com erros: nesse caso, use \"Cantando\".",
+                        "O app separa a voz do instrumental (pela posição no estéreo, pelos harmônicos e pelo vibrato) " +
+                            "e transcreve só o que é cantado. Se alguma nota sair errada, corrija na prática ou use \"Cantando\".",
                         style = VoxType.small,
                         color = c.muted,
                     )
@@ -212,10 +213,11 @@ fun AddSongScreen(nav: Nav) {
                                 try {
                                     val r = FileAnalyzer.analyze(context, uri) { p -> progress = p }
                                     if (r.notes.size < 4) {
-                                        error = "Não encontrei uma melodia clara neste arquivo. Tente \"Cantando\"."
+                                        error = "Não encontrei voz cantada neste arquivo. Se for instrumental, use \"Cantando\" ou \"Digitando\"."
                                     } else {
                                         notes = r.notes
                                         durationMs = r.durationMs
+                                        voiced = r.voicedRatio
                                     }
                                 } catch (e: CancellationException) {
                                     throw e
@@ -257,7 +259,12 @@ fun AddSongScreen(nav: Nav) {
                         style = VoxType.body,
                         color = c.text,
                     )
-                    Text("Você pode ajustar o tom e o intervalo da segunda voz na próxima tela.", style = VoxType.small, color = c.muted)
+                    voiced?.let { v ->
+                        if (source == Source.FILE) {
+                            Text("Voz encontrada em ${(v * 100).roundToInt()}% da música; o resto é instrumental.", style = VoxType.small, color = c.muted)
+                        }
+                    }
+                    Text("Na próxima tela você escolhe o tipo de segunda voz ou o backing vocal.", style = VoxType.small, color = c.muted)
                 }
             }
             error?.let {
@@ -287,7 +294,7 @@ private fun SingSource(audioUri: String?, onResult: (List<NoteEvent>, Int) -> Un
         var elapsed by remember { mutableFloatStateOf(0f) }
         var current by remember { mutableIntStateOf(-1) }
         val tick = remember { mutableLongStateOf(0L) }
-        val player = remember(audioUri) { audioUri?.let { SongPlayer(context, Uri.parse(it)) } }
+        val player = remember(audioUri) { audioUri?.let { StemPlayer(context, Uri.parse(it)) } }
         DisposableEffect(player) {
             player?.prepare {}
             onDispose { player?.release() }

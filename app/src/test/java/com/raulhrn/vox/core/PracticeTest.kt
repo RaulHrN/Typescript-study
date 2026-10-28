@@ -27,7 +27,7 @@ class PracticeTest {
     fun harmonyExerciseTargetsTheSecondVoice() {
         val ex = Exercise(
             id = "h", title = "h", category = "h", summary = "", steps = emptyList(),
-            pattern = intArrayOf(0, 2, 4), harmonySteps = 2,
+            pattern = intArrayOf(0, 2, 4), harmony = HarmonyMode.THIRD_ABOVE,
         )
         val tl = ExerciseTimeline.build(ex, 62) // D major
         val targets = tl.notes.filter { it.role == Role.TARGET }.map { it.midi }

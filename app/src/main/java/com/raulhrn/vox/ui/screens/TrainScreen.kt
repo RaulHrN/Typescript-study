@@ -1,5 +1,6 @@
 package com.raulhrn.vox.ui.screens
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -42,6 +43,21 @@ fun TrainScreen(nav: Nav) {
                 Text("DICA DO DIA", style = VoxType.caps, color = c.accent)
                 Spacer(Modifier.height(6.dp))
                 Text(tip, style = VoxType.body, color = c.text)
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Panel(Modifier.weight(1f), onClick = { nav.push(Route.Lessons) }) {
+                    Text("APRENDER", style = VoxType.caps, color = c.accent)
+                    Spacer(Modifier.height(6.dp))
+                    Text("Tipos de segunda voz", style = VoxType.label, color = c.text)
+                    Text("8 tipos, do básico ao avançado", style = VoxType.small, color = c.muted)
+                }
+                Panel(Modifier.weight(1f), onClick = { nav.push(Route.BackingLab) }) {
+                    Text("LABORATÓRIO", style = VoxType.caps, color = c.accent)
+                    Spacer(Modifier.height(6.dp))
+                    Text("Backing vocal", style = VoxType.label, color = c.text)
+                    Text("Conforme a voz do regente", style = VoxType.small, color = c.muted)
+                }
             }
             Spacer(Modifier.height(12.dp))
             Panel {

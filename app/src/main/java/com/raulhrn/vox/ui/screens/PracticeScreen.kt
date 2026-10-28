@@ -2,6 +2,7 @@ package com.raulhrn.vox.ui.screens
 
 import android.net.Uri
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -9,7 +10,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -34,9 +34,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.raulhrn.vox.audio.MicEngine
-import com.raulhrn.vox.audio.SongPlayer
+import com.raulhrn.vox.audio.StemPlayer
 import com.raulhrn.vox.audio.Synth
 import com.raulhrn.vox.audio.SynthTrack
+import com.raulhrn.vox.core.Backing
+import com.raulhrn.vox.core.BackingPlan
+import com.raulhrn.vox.core.BackingStyle
+import com.raulhrn.vox.core.FloatList
 import com.raulhrn.vox.core.Harmony
 import com.raulhrn.vox.core.HarmonyMode
 import com.raulhrn.vox.core.Key
@@ -46,9 +50,12 @@ import com.raulhrn.vox.core.Phrases
 import com.raulhrn.vox.core.Role
 import com.raulhrn.vox.core.Scorer
 import com.raulhrn.vox.core.TimedNote
+import com.raulhrn.vox.core.VoiceType
+import com.raulhrn.vox.core.dbToGain
 import com.raulhrn.vox.data.Prefs
 import com.raulhrn.vox.data.Song
 import com.raulhrn.vox.data.SongStore
+import com.raulhrn.vox.ui.BalanceMeter
 import com.raulhrn.vox.ui.ChoiceGrid
 import com.raulhrn.vox.ui.Chip
 import com.raulhrn.vox.ui.Header
@@ -61,6 +68,7 @@ import com.raulhrn.vox.ui.PianoRoll
 import com.raulhrn.vox.ui.RollKind
 import com.raulhrn.vox.ui.RollNote
 import com.raulhrn.vox.ui.RoundButton
+import com.raulhrn.vox.ui.Route
 import com.raulhrn.vox.ui.ScreenPadding
 import com.raulhrn.vox.ui.Stepper
 import com.raulhrn.vox.ui.Trace
@@ -68,6 +76,7 @@ import com.raulhrn.vox.ui.Vox
 import com.raulhrn.vox.ui.VoxButton
 import com.raulhrn.vox.ui.VoxIcons
 import com.raulhrn.vox.ui.VoxType
+import com.raulhrn.vox.ui.balanceHint
 import com.raulhrn.vox.ui.formatTime
 import kotlinx.coroutines.delay
 import kotlin.math.abs
@@ -93,33 +102,61 @@ fun PracticeScreen(nav: Nav, id: String) {
 
 private val SPEEDS = listOf(0.5f, 0.75f, 1f)
 
+/** The lines of one practice setup: the lead, the part you sing and an optional other part. */
+private class Lines(
+    val lead: List<NoteEvent>,
+    val mine: List<NoteEvent>,
+    val other: List<NoteEvent>,
+    val mineDb: Float,
+    val otherDb: Float,
+    val plan: BackingPlan?,
+)
+
 @Composable
 private fun PracticeContent(nav: Nav, song: Song) {
     val c = Vox.colors
     val context = LocalContext.current
     val naming = Prefs.naming
+    val singer = Prefs.rangeLow..Prefs.rangeHigh
 
     var key by remember { mutableStateOf(song.key) }
     var mode by remember { mutableStateOf(song.mode) }
     var octave by remember { mutableIntStateOf(song.octave) }
-    LaunchedEffect(key, mode, octave) {
-        val saved = SongStore.find(song.id)
-        if (saved != null && (saved.key != key || saved.mode != mode || saved.octave != octave)) {
-            SongStore.upsert(saved.copy(key = key, mode = mode, octave = octave))
-        }
+    var backingMode by remember { mutableStateOf(song.backingMode) }
+    var leadVoice by remember { mutableStateOf(song.leadVoice ?: VoiceType.classify(singer.first, singer.last)) }
+    var style by remember { mutableStateOf(song.backingStyle) }
+    var voices by remember { mutableIntStateOf(song.backingVoices) }
+    var part by remember { mutableIntStateOf(song.backingPart) }
+    LaunchedEffect(key, mode, octave, backingMode, leadVoice, style, voices, part) {
+        val saved = SongStore.find(song.id) ?: return@LaunchedEffect
+        val updated = saved.copy(
+            key = key, mode = mode, octave = octave, backingMode = backingMode,
+            leadVoice = leadVoice, backingStyle = style, backingVoices = voices, backingPart = part,
+        )
+        if (updated != saved) SongStore.upsert(updated)
     }
 
-    val harmony = remember(song.notes, key, mode, octave) { Harmony.voice(song.notes, key, mode, octave * 12) }
-    val scorer = remember(harmony) { Scorer(harmony.map { TimedNote(it.startMs, it.durMs, it.midi, Role.TARGET) }) }
-    val roll = remember(song.notes, harmony) {
-        song.notes.map { RollNote(it.startMs, it.durMs, it.midi, RollKind.MELODY) } +
-            harmony.mapIndexed { i, n -> RollNote(n.startMs, n.durMs, n.midi, RollKind.TARGET, i) }
+    val lines = remember(song.notes, key, mode, octave, backingMode, leadVoice, style, voices, part, singer) {
+        if (!backingMode) {
+            Lines(song.notes, Harmony.voice(song.notes, key, mode, octave * 12, singer), emptyList(), 0f, 0f, null)
+        } else {
+            val plan = Backing.arrange(song.notes, key, style, leadVoice, singer, voices)
+            val mine = plan.parts.getOrNull(part.coerceIn(0, max(0, plan.parts.size - 1)))
+            val other = plan.parts.firstOrNull { it !== mine }
+            Lines(plan.lead, mine?.notes ?: emptyList(), other?.notes ?: emptyList(), mine?.gainDb ?: 0f, other?.gainDb ?: 0f, plan)
+        }
+    }
+    val scorer = remember(lines) { Scorer(lines.mine.map { TimedNote(it.startMs, it.durMs, it.midi, Role.TARGET) }) }
+    val roll = remember(lines) {
+        lines.lead.map { RollNote(it.startMs, it.durMs, it.midi, RollKind.MELODY) } +
+            lines.other.map { RollNote(it.startMs, it.durMs, it.midi, RollKind.PART) } +
+            lines.mine.mapIndexed { i, n -> RollNote(n.startMs, n.durMs, n.midi, RollKind.TARGET, i) }
     }
     val phrases = remember(song.notes) { Phrases.split(song.notes) }
     val totalMs = max(song.durationMs, song.notes.lastOrNull()?.endMs ?: 0).toFloat()
 
     val synth = remember { Synth() }
-    val player = remember(song.audioUri) { song.audioUri?.let { SongPlayer(context, Uri.parse(it)) } }
+    val player = remember(song.audioUri) { song.audioUri?.let { StemPlayer(context, Uri.parse(it)) } }
     var playerState by remember { mutableIntStateOf(0) } // 0 loading, 1 ready, 2 failed
     DisposableEffect(player) {
         player?.prepare { playerState = 1 }
@@ -141,9 +178,11 @@ private fun PracticeContent(nav: Nav, song: Song) {
     var sliderPos by remember { mutableFloatStateOf(0f) }
     var dragging by remember { mutableStateOf<Float?>(null) }
     var speed by remember { mutableFloatStateOf(1f) }
-    var audioOn by remember { mutableStateOf(true) }
-    var melodyOn by remember { mutableStateOf(song.audioUri == null) }
-    var voiceOn by remember { mutableStateOf(true) }
+    // Song audio: null = off, otherwise the mix mode.
+    var music by remember { mutableStateOf<StemPlayer.Mix?>(StemPlayer.Mix.ORIGINAL) }
+    var leadOn by remember { mutableStateOf(song.audioUri == null) }
+    var mineOn by remember { mutableStateOf(true) }
+    var otherOn by remember { mutableStateOf(true) }
     var loop by remember { mutableStateOf(false) }
     var phraseIndex by remember { mutableIntStateOf(0) }
     var showSettings by remember { mutableStateOf(false) }
@@ -152,16 +191,25 @@ private fun PracticeContent(nav: Nav, song: Song) {
     var accuracy by remember { mutableIntStateOf(-1) }
     var editing by remember { mutableStateOf(false) }
     var selected by remember { mutableIntStateOf(-1) }
+    var calibrating by remember { mutableStateOf(false) }
+    val relative = remember { mutableFloatStateOf(Float.NaN) }
     val trace = remember { Trace() }
     val tick = remember { mutableLongStateOf(0L) }
 
-    val melodyTrack = remember(song.notes) { SynthTrack.of(song.notes, gain = 0.26f) }
-    val voiceTrack = remember(harmony) { SynthTrack.of(harmony, gain = 0.24f, bright = true) }
+    val baseGain = 0.26f
+    val leadTrack = remember(lines) { SynthTrack.of(lines.lead, gain = baseGain) }
+    val mineTrack = remember(lines, backingMode) {
+        // In backing mode the guide is heard at the recommended balance against the lead.
+        SynthTrack.of(lines.mine, gain = if (backingMode) baseGain * dbToGain(lines.mineDb) * 1.4f else 0.24f, bright = true)
+    }
+    val otherTrack = remember(lines) { SynthTrack.of(lines.other, gain = baseGain * dbToGain(lines.otherDb) * 1.4f) }
     SideEffect {
-        melodyTrack.enabled = melodyOn
-        voiceTrack.enabled = voiceOn
+        leadTrack.enabled = leadOn
+        mineTrack.enabled = mineOn
+        otherTrack.enabled = otherOn
         synth.a4 = Prefs.a4
-        player?.setVolume(if (audioOn) 1f else 0f)
+        player?.setVolume(if (music != null) 1f else 0f)
+        player?.mix = music ?: StemPlayer.Mix.ORIGINAL
     }
 
     val useAudio = player != null && playerState == 1
@@ -174,11 +222,8 @@ private fun PracticeContent(nav: Nav, song: Song) {
 
     fun start(from: Float) {
         val f = from.coerceIn(0f, totalMs)
-        if (useAudio) {
-            player!!.setVolume(if (audioOn) 1f else 0f)
-            player.play(f.roundToInt(), speed)
-        }
-        synth.start(listOf(melodyTrack, voiceTrack), f, speed)
+        if (useAudio) player!!.play(f.roundToInt(), speed)
+        synth.start(listOf(leadTrack, otherTrack, mineTrack), f, speed)
         trace.clear()
         pausedAt.floatValue = f
         playing = true
@@ -245,17 +290,19 @@ private fun PracticeContent(nav: Nav, song: Song) {
         seek(max(0f, phrases[phraseIndex].startMs - 800f))
     }
 
-    // A new second voice while playing: restart the guide from the current position.
-    LaunchedEffect(voiceTrack) {
-        if (playing) synth.start(listOf(melodyTrack, voiceTrack), now(), speed)
+    // New lines while playing: restart the guides from the current position.
+    LaunchedEffect(leadTrack, mineTrack, otherTrack) {
+        if (playing) synth.start(listOf(leadTrack, otherTrack, mineTrack), now(), speed)
     }
 
-    MicActive(enabled = playing)
+    MicActive(enabled = playing || calibrating)
 
     LaunchedEffect(playing) {
         if (!playing) return@LaunchedEffect
         var lastFrame = MicEngine.frames
         var lastUi = 0L
+        var smooth = Float.NaN
+        var lastVoiced = 0L
         while (true) {
             withFrameMillis { frameMs ->
                 val pos = now()
@@ -269,9 +316,17 @@ private fun PracticeContent(nav: Nav, song: Song) {
                     val m = MicEngine.midi[idx]
                     scorer.add(t, m)
                     trace.add(t, m)
+                    if (!m.isNaN()) {
+                        val db = MicEngine.levelDb[idx]
+                        smooth = if (smooth.isNaN()) db else smooth + (db - smooth) * 0.1f
+                        lastVoiced = frameMs
+                    }
                     i++
                 }
                 lastFrame = f
+                if (frameMs - lastVoiced > 600) smooth = Float.NaN
+                val ref = Prefs.leadLevelDb
+                relative.floatValue = if (smooth.isNaN() || ref.isNaN()) Float.NaN else smooth - ref
 
                 if (phrases.isNotEmpty()) {
                     if (loop) {
@@ -300,15 +355,51 @@ private fun PracticeContent(nav: Nav, song: Song) {
         }
     }
 
+    // Balance calibration: a few seconds of the melody sung at lead-voice volume.
+    val calibration = remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(calibrating) {
+        if (!calibrating) return@LaunchedEffect
+        val levels = FloatList(256)
+        var lastFrame = MicEngine.frames
+        while (levels.size < 130) {
+            withFrameMillis {
+                val f = MicEngine.frames
+                var i = max(lastFrame, f - 64)
+                while (i < f) {
+                    val idx = MicEngine.index(i)
+                    if (!MicEngine.midi[idx].isNaN()) levels.add(MicEngine.levelDb[idx])
+                    i++
+                }
+                lastFrame = f
+                calibration.floatValue = levels.size / 130f
+            }
+        }
+        val sorted = levels.toArray().also { it.sort() }
+        Prefs.leadLevelDb = sorted[sorted.size / 2]
+        calibrating = false
+    }
+
     Column(Modifier.fillMaxSize()) {
         Header(
             song.title,
             onBack = { nav.pop() },
-            subtitle = "${key.label(naming)} · ${mode.label}",
+            subtitle = key.label(naming) + " · " + if (backingMode) style.label else mode.label,
         ) {
             IconBtn(VoxIcons.Tune, "Ajustes", { showSettings = !showSettings }, tint = if (showSettings) c.accent else null)
             IconBtn(VoxIcons.Delete, "Excluir", { confirmDelete = true })
         }
+
+        ChoiceGrid(
+            listOf(false, true),
+            columns = 2,
+            selected = { it == backingMode },
+            label = { if (it) "Backing vocal" else "Segunda voz" },
+            onSelect = {
+                backingMode = it
+                selected = -1
+            },
+        )
+        Spacer(Modifier.height(8.dp))
 
         if (confirmDelete) {
             Panel {
@@ -326,8 +417,9 @@ private fun PracticeContent(nav: Nav, song: Song) {
             Spacer(Modifier.height(8.dp))
         }
 
+        // The settings take the place of the roll while open.
         if (showSettings) {
-            Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
                 Text("TOM DA MÚSICA", style = VoxType.caps, color = c.muted)
                 Spacer(Modifier.height(6.dp))
                 ChoiceGrid(
@@ -346,21 +438,93 @@ private fun PracticeContent(nav: Nav, song: Song) {
                     onSelect = { key = Key(key.tonic, it) },
                 )
                 Spacer(Modifier.height(14.dp))
-                Text("SEGUNDA VOZ", style = VoxType.caps, color = c.muted)
-                Spacer(Modifier.height(6.dp))
-                ChoiceGrid(
-                    HarmonyMode.entries.toList(),
-                    columns = 4,
-                    selected = { it == mode },
-                    label = { it.label },
-                    onSelect = { mode = it },
-                )
-                Stepper(
-                    "Oitava da 2ª voz",
-                    if (octave > 0) "+$octave" else "$octave",
-                    { octave = (octave - 1).coerceAtLeast(-2) },
-                    { octave = (octave + 1).coerceAtMost(2) },
-                )
+                if (!backingMode) {
+                    Text("TIPO DE SEGUNDA VOZ", style = VoxType.caps, color = c.muted)
+                    Spacer(Modifier.height(6.dp))
+                    ChoiceGrid(
+                        HarmonyMode.entries.toList(),
+                        columns = 4,
+                        selected = { it == mode },
+                        label = { it.label },
+                        onSelect = { mode = it },
+                    )
+                    Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(mode.summary, style = VoxType.small, color = c.muted, modifier = Modifier.weight(1f))
+                        Text(
+                            "aprender",
+                            style = VoxType.label,
+                            color = c.accent,
+                            modifier = Modifier.clickable { nav.push(Route.Lesson(mode)) }.padding(6.dp),
+                        )
+                    }
+                    if (mode.parallel) {
+                        Stepper(
+                            "Oitava da 2ª voz",
+                            if (octave > 0) "+$octave" else "$octave",
+                            { octave = (octave - 1).coerceAtLeast(-2) },
+                            { octave = (octave + 1).coerceAtMost(2) },
+                        )
+                    }
+                } else {
+                    Text("VOZ DO REGENTE", style = VoxType.caps, color = c.muted)
+                    Spacer(Modifier.height(6.dp))
+                    ChoiceGrid(
+                        VoiceType.entries.toList(),
+                        columns = 3,
+                        selected = { it == leadVoice },
+                        label = { it.label },
+                        onSelect = { leadVoice = it },
+                    )
+                    Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Sua voz: ${VoiceType.classify(singer.first, singer.last).label} " +
+                                "(${NoteNames.full(singer.first, naming)}–${NoteNames.full(singer.last, naming)})",
+                            style = VoxType.small,
+                            color = c.muted,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            "medir",
+                            style = VoxType.label,
+                            color = c.accent,
+                            modifier = Modifier.clickable { nav.push(Route.RangeTest) }.padding(6.dp),
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Text("ESTILO", style = VoxType.caps, color = c.muted)
+                    Spacer(Modifier.height(6.dp))
+                    ChoiceGrid(
+                        BackingStyle.entries.toList(),
+                        columns = 4,
+                        selected = { it == style },
+                        label = { it.label },
+                        onSelect = { style = it },
+                    )
+                    Text(style.summary, style = VoxType.small, color = c.muted, modifier = Modifier.padding(top = 6.dp))
+                    Spacer(Modifier.height(10.dp))
+                    ChoiceGrid(
+                        listOf(1, 2),
+                        columns = 2,
+                        selected = { it == voices },
+                        label = { if (it == 1) "1 voz de backing" else "2 vozes de backing" },
+                        onSelect = {
+                            voices = it
+                            if (it == 1) part = 0
+                        },
+                    )
+                    val parts = lines.plan?.parts.orEmpty()
+                    if (parts.size == 2) {
+                        Spacer(Modifier.height(6.dp))
+                        ChoiceGrid(
+                            listOf(0, 1),
+                            columns = 2,
+                            selected = { it == part },
+                            label = { "Cantar: " + parts[it].name.substringBefore(" (") + if (it == 0) " agudo" else " grave" },
+                            onSelect = { part = it },
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
                 VoxButton(
                     "Corrigir notas da melodia",
                     {
@@ -375,7 +539,16 @@ private fun PracticeContent(nav: Nav, song: Song) {
             }
         }
 
-        PianoRoll(
+        if (backingMode && lines.mine.isEmpty()) {
+            Text(
+                "Esta música não tem pausas entre as frases para respostas. Escolha outro estilo nos ajustes.",
+                style = VoxType.small,
+                color = c.warn,
+                modifier = Modifier.padding(bottom = 6.dp),
+            )
+        }
+
+        if (!showSettings) PianoRoll(
             notes = roll,
             clock = { now() },
             tick = tick,
@@ -388,6 +561,7 @@ private fun PracticeContent(nav: Nav, song: Song) {
             selected = if (editing) selected else -1,
             onTap = if (editing) ({ t, m -> pickNote(t, m) }) else null,
             onScrub = if (!playing) ({ d -> seek(pausedAt.floatValue + d) }) else null,
+            emptyLabel = "trecho instrumental",
         )
 
         if (editing) {
@@ -427,7 +601,35 @@ private fun PracticeContent(nav: Nav, song: Song) {
             }
         }
 
-        Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (backingMode && lines.mine.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("EQUILÍBRIO", style = VoxType.caps, color = c.muted, modifier = Modifier.weight(1f))
+                val target = lines.mineDb
+                val rel = relative.floatValue
+                Text(
+                    when {
+                        calibrating -> "cante a melodia forte… ${(calibration.floatValue * 100).roundToInt()}%"
+                        Prefs.leadLevelDb.isNaN() -> "alvo ${target.roundToInt()} dB"
+                        rel.isNaN() -> "alvo ${target.roundToInt()} dB"
+                        else -> "%+.0f dB · %s".format(rel, balanceHint(rel, target))
+                    },
+                    style = VoxType.small,
+                    color = if (!rel.isNaN() && abs(rel - target) <= 2.5f) c.accent else c.muted,
+                )
+                Text(
+                    if (Prefs.leadLevelDb.isNaN()) "calibrar" else "recalibrar",
+                    style = VoxType.label,
+                    color = c.accent,
+                    modifier = Modifier
+                        .clickable(enabled = !playing && !calibrating) { calibrating = true }
+                        .padding(start = 10.dp, top = 4.dp, bottom = 4.dp),
+                )
+            }
+            BalanceMeter({ relative.floatValue }, lines.mineDb)
+        }
+
+        Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 "${formatTime(dragging ?: sliderPos)} / ${formatTime(totalMs)}",
                 style = VoxType.small,
@@ -438,7 +640,7 @@ private fun PracticeContent(nav: Nav, song: Song) {
                 when {
                     playerState == 2 -> "áudio indisponível"
                     accuracy < 0 -> if (phrases.isNotEmpty()) "frase ${phraseIndex + 1} de ${phrases.size}" else ""
-                    else -> "2ª voz $accuracy%"
+                    else -> (if (backingMode) "backing" else "2ª voz") + " $accuracy%"
                 },
                 style = VoxType.label,
                 color = when {
@@ -488,11 +690,22 @@ private fun PracticeContent(nav: Nav, song: Song) {
         }
         Spacer(Modifier.height(10.dp))
 
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (player != null) Chip("Música", audioOn && playerState != 2, { audioOn = !audioOn })
-            Chip("Melodia", melodyOn, { melodyOn = !melodyOn })
-            Chip("2ª voz", voiceOn, { voiceOn = !voiceOn })
-            Spacer(Modifier.weight(1f))
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (player != null) {
+                Chip(
+                    if (music == null) "Música desligada" else "Música: ${music!!.label}",
+                    music != null && playerState != 2,
+                    {
+                        music = nextMix(music, player.stereo)
+                    },
+                )
+            }
+            Chip(if (backingMode) "Regente" else "Melodia", leadOn, { leadOn = !leadOn })
+            Chip(if (backingMode) "Sua parte" else "2ª voz", mineOn, { mineOn = !mineOn })
+            if (lines.other.isNotEmpty()) Chip("Outra voz", otherOn, { otherOn = !otherOn })
             val label = if (speed == 1f) "1×" else "%s×".format(speed.toString().replace('.', ','))
             Chip(label, speed != 1f, {
                 speed = SPEEDS[(SPEEDS.indexOf(speed) + 1) % SPEEDS.size]
@@ -502,20 +715,40 @@ private fun PracticeContent(nav: Nav, song: Song) {
         Spacer(Modifier.height(10.dp))
         Panel(onClick = { showHelp = !showHelp }) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("COMO PRATICAR", style = VoxType.caps, color = c.muted, modifier = Modifier.weight(1f))
+                Text(if (backingMode) "COMO FAZER O BACKING" else "COMO PRATICAR", style = VoxType.caps, color = c.muted, modifier = Modifier.weight(1f))
                 Text(if (showHelp) "ocultar" else "mostrar", style = VoxType.small, color = c.muted)
             }
             if (showHelp) {
-                for ((n, step) in HELP.withIndex()) {
+                val steps = if (backingMode) BACKING_HELP else HELP
+                for ((n, step) in steps.withIndex()) {
                     Row(Modifier.padding(top = 8.dp)) {
                         Text("${n + 1}", style = VoxType.label, color = c.accent, modifier = Modifier.width(18.dp))
                         Text(step, style = VoxType.small, color = c.text)
+                    }
+                }
+                val tips = lines.plan?.tips.orEmpty()
+                if (backingMode && tips.isNotEmpty()) {
+                    Spacer(Modifier.height(12.dp))
+                    Text("PARA ESTA COMBINAÇÃO DE VOZES", style = VoxType.caps, color = c.muted)
+                    for (tip in tips) {
+                        Row(Modifier.padding(top = 6.dp)) {
+                            Text("•", style = VoxType.small, color = c.accent, modifier = Modifier.width(14.dp))
+                            Text(tip, style = VoxType.small, color = c.text)
+                        }
                     }
                 }
             }
         }
         Spacer(Modifier.height(10.dp))
     }
+}
+
+/** Original → Sem voz (stereo only) → Voz em destaque → off → Original. */
+private fun nextMix(current: StemPlayer.Mix?, stereo: Boolean): StemPlayer.Mix? = when (current) {
+    StemPlayer.Mix.ORIGINAL -> if (stereo) StemPlayer.Mix.INSTRUMENTAL else StemPlayer.Mix.VOICE
+    StemPlayer.Mix.INSTRUMENTAL -> StemPlayer.Mix.VOICE
+    StemPlayer.Mix.VOICE -> null
+    null -> StemPlayer.Mix.ORIGINAL
 }
 
 private val EDITS: List<Pair<String, (NoteEvent) -> NoteEvent?>> = listOf(
@@ -528,9 +761,17 @@ private val EDITS: List<Pair<String, (NoteEvent) -> NoteEvent?>> = listOf(
 
 private val HELP = listOf(
     "Ouça com \"Melodia\" ligada até conhecer bem a linha principal.",
-    "Desligue \"Música\" e \"Melodia\" e ouça só a \"2ª voz\" algumas vezes.",
-    "Com fones, cante junto com a 2ª voz. A linha branca é você; as barras verdes são o alvo.",
-    "Ligue a música e cante com o guia da 2ª voz.",
+    "Ponha a música em \"Sem voz\" e ouça só a \"2ª voz\" algumas vezes.",
+    "Com fones, cante junto com a 2ª voz. A linha clara é você; as barras âmbar são o alvo.",
+    "Volte a música para \"Original\" e cante com o guia da 2ª voz.",
     "Desligue o guia e cante só com a música. Mire em 80% ou mais.",
     "Use ◀ ▶ para andar de frase em frase, o botão de repetir para fixar um trecho e 0,75× para estudar devagar.",
+)
+
+private val BACKING_HELP = listOf(
+    "Nos ajustes, escolha a voz do regente e o estilo de backing. O app escreve a sua parte na sua extensão.",
+    "Ouça o arranjo com \"Regente\" e \"Sua parte\" ligados: o guia já toca no volume recomendado.",
+    "Toque em \"calibrar\" e cante a melodia forte uma vez: essa é a referência do regente.",
+    "Cante a sua parte com o guia, mantendo o ponto do medidor dentro da faixa âmbar.",
+    "Desligue o guia e cante com a música em \"Sem voz\" (karaokê) ou \"Original\".",
 )

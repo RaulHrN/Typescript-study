@@ -28,7 +28,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
+import com.raulhrn.vox.core.HarmonyMode
+import com.raulhrn.vox.core.VoiceType
 import com.raulhrn.vox.ui.screens.AddSongScreen
+import com.raulhrn.vox.ui.screens.BackingLabScreen
+import com.raulhrn.vox.ui.screens.LessonScreen
+import com.raulhrn.vox.ui.screens.LessonsScreen
 import com.raulhrn.vox.ui.screens.ArticleScreen
 import com.raulhrn.vox.ui.screens.ExerciseScreen
 import com.raulhrn.vox.ui.screens.LiveScreen
@@ -47,12 +52,16 @@ enum class Tab(val label: String) {
 }
 
 sealed interface Route {
-    data class Exercise(val id: String) : Route
+    /** [lead]: lead singer's voice type for backing exercises (null = same as the user). */
+    data class Exercise(val id: String, val lead: VoiceType? = null) : Route
     data object RangeTest : Route
     data object AddSong : Route
     data class Practice(val id: String) : Route
     data class Article(val index: Int) : Route
     data object Settings : Route
+    data object Lessons : Route
+    data class Lesson(val mode: HarmonyMode) : Route
+    data object BackingLab : Route
 }
 
 /** Minimal navigation: one tab plus a stack of pushed screens. */
@@ -93,12 +102,15 @@ fun VoxApp() {
                         Tab.TRAIN -> TrainScreen(nav)
                         Tab.SONGS -> SongsScreen(nav)
                         Tab.STUDY -> StudyScreen(nav)
-                        is Route.Exercise -> ExerciseScreen(nav, screen.id)
+                        is Route.Exercise -> ExerciseScreen(nav, screen.id, screen.lead)
                         Route.RangeTest -> RangeTestScreen(nav)
                         Route.AddSong -> AddSongScreen(nav)
                         is Route.Practice -> PracticeScreen(nav, screen.id)
                         is Route.Article -> ArticleScreen(nav, screen.index)
                         Route.Settings -> SettingsScreen(nav)
+                        Route.Lessons -> LessonsScreen(nav)
+                        is Route.Lesson -> LessonScreen(nav, screen.mode)
+                        Route.BackingLab -> BackingLabScreen(nav)
                     }
                 }
             }

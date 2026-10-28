@@ -5,9 +5,11 @@ import android.os.Handler
 import android.os.Looper
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import com.raulhrn.vox.core.BackingStyle
 import com.raulhrn.vox.core.HarmonyMode
 import com.raulhrn.vox.core.Key
 import com.raulhrn.vox.core.NoteEvent
+import com.raulhrn.vox.core.VoiceType
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -23,6 +25,13 @@ data class Song(
     val octave: Int,
     val createdAt: Long,
     val durationMs: Int,
+    /** Practising the second voice (false) or backing vocals (true). */
+    val backingMode: Boolean = false,
+    /** Voice type of the lead singer (regente) for backing vocals; null = same as the user. */
+    val leadVoice: VoiceType? = null,
+    val backingStyle: BackingStyle = BackingStyle.HARMONY,
+    val backingVoices: Int = 1,
+    val backingPart: Int = 0,
 )
 
 /** Songs saved as one small JSON file. Reads and writes happen off the main thread. */
@@ -104,6 +113,11 @@ object SongStore {
                     octave = o.optInt("octave", 0),
                     createdAt = o.optLong("created", 0L),
                     durationMs = o.optInt("duration", notes.lastOrNull()?.endMs ?: 0),
+                    backingMode = o.optBoolean("backing", false),
+                    leadVoice = VoiceType.entries.firstOrNull { it.name == o.optString("lead") },
+                    backingStyle = BackingStyle.entries.firstOrNull { it.name == o.optString("style") } ?: BackingStyle.HARMONY,
+                    backingVoices = o.optInt("voices", 1).coerceIn(1, 2),
+                    backingPart = o.optInt("part", 0).coerceIn(0, 1),
                 ),
             )
         }
@@ -130,6 +144,11 @@ object SongStore {
                     .put("octave", s.octave)
                     .put("created", s.createdAt)
                     .put("duration", s.durationMs)
+                    .put("backing", s.backingMode)
+                    .put("lead", s.leadVoice?.name ?: JSONObject.NULL)
+                    .put("style", s.backingStyle.name)
+                    .put("voices", s.backingVoices)
+                    .put("part", s.backingPart)
                     .put("notes", packed),
             )
         }

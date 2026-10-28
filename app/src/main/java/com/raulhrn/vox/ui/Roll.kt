@@ -34,7 +34,8 @@ import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 
-enum class RollKind { GUIDE, MELODY, TARGET }
+/** GUIDE: notes to listen to; MELODY: the lead; PART: another harmony part; TARGET: what you sing. */
+enum class RollKind { GUIDE, MELODY, PART, TARGET }
 
 class RollNote(val startMs: Int, val durMs: Int, val midi: Int, val kind: RollKind, val target: Int = -1)
 
@@ -151,6 +152,8 @@ fun PianoRoll(
     playhead: Float = 0.3f,
     accuracy: ((Int) -> Float)? = null,
     selected: Int = -1,
+    /** Shown when no note is near the playhead, e.g. "trecho instrumental". */
+    emptyLabel: String? = null,
     onTap: ((timeMs: Float, midi: Float) -> Unit)? = null,
     onScrub: ((deltaMs: Float) -> Unit)? = null,
 ) {
@@ -233,7 +236,8 @@ fun PianoRoll(
             val y = h - (n.midi - rLo) / span * h
             val color = when (n.kind) {
                 RollKind.GUIDE -> c.faint
-                RollKind.MELODY -> c.melody.copy(alpha = 0.5f)
+                RollKind.MELODY -> c.melody.copy(alpha = 0.6f)
+                RollKind.PART -> c.rose.copy(alpha = 0.6f)
                 RollKind.TARGET -> {
                     val acc = if (accuracy != null && n.target >= 0) accuracy(n.target) else -1f
                     when {
@@ -267,6 +271,13 @@ fun PianoRoll(
         }
 
         drawLine(c.text.copy(alpha = 0.3f), Offset(px, 0f), Offset(px, h), strokeWidth = 1.dp.toPx())
+
+        if (emptyLabel != null && notes.isNotEmpty() && notes.none { it.startMs < t + 1600 && it.startMs + it.durMs > t - 400 }) {
+            paint.color = c.muted.toArgb()
+            paint.textSize = 14.sp.toPx()
+            val textWidth = paint.measureText(emptyLabel)
+            drawContext.canvas.nativeCanvas.drawText(emptyLabel, (w - textWidth) / 2f, h / 2f, paint)
+        }
 
         if (trace != null) {
             path.reset()

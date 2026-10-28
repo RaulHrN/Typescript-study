@@ -89,7 +89,7 @@ class Synth {
         private val fromMs: Float,
         private val speed: Float,
         private val untilMs: Float,
-    ) : Thread("vox-synth") {
+    ) : Thread("cantorial-synth") {
         @Volatile
         var alive = true
 

@@ -14,7 +14,7 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Vox"
+        android:theme="@style/Theme.Cantorial"
         android:enableOnBackInvokedCallback="true"
         tools:targetApi="33">
         <activity

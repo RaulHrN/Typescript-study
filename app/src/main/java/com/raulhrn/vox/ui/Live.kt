@@ -220,3 +220,35 @@ fun LevelBar(level: () -> Float, modifier: Modifier = Modifier) {
         }
     }
 }
+
+/**
+ * Backing balance meter: your level relative to the lead-voice reference, from -18 to +4 dB,
+ * with the recommended zone ([target] ± 2.5 dB) highlighted.
+ */
+@Composable
+fun BalanceMeter(relative: () -> Float, target: Float, modifier: Modifier = Modifier) {
+    val c = Vox.colors
+    Canvas(modifier.fillMaxWidth().height(28.dp)) {
+        val lo = -18f
+        val hi = 4f
+        fun x(db: Float) = (db.coerceIn(lo, hi) - lo) / (hi - lo) * size.width
+        val y = size.height / 2f
+        drawLine(c.line, Offset(0f, y), Offset(size.width, y), strokeWidth = 4.dp.toPx())
+        drawLine(c.accent.copy(alpha = 0.35f), Offset(x(target - 2.5f), y), Offset(x(target + 2.5f), y), strokeWidth = 10.dp.toPx())
+        // 0 dB = the lead singer.
+        drawLine(c.muted, Offset(x(0f), y - 9.dp.toPx()), Offset(x(0f), y + 9.dp.toPx()), strokeWidth = 1.5.dp.toPx())
+        val v = relative()
+        if (!v.isNaN()) {
+            val ok = abs(v - target) <= 2.5f
+            drawCircle(if (ok) c.accent else c.warn, radius = 7.dp.toPx(), center = Offset(x(v), y))
+        }
+    }
+}
+
+/** Words for where the singer is compared to the balance target. */
+fun balanceHint(relative: Float, target: Float): String = when {
+    relative.isNaN() -> "cante para medir"
+    relative - target > 2.5f -> "mais suave"
+    target - relative > 2.5f -> "um pouco mais forte"
+    else -> "na medida"
+}

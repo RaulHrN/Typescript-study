@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="window_background">#FFFAFAF8</color>
-    <color name="icon_background">#FF0B0B0D</color>
+    <color name="window_background">#FFFCF6EE</color>
+    <color name="icon_background">#FF140F0C</color>
 </resources>

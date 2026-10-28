@@ -30,6 +30,8 @@ class FloatList(capacity: Int = 1024) {
         size = 0
     }
 
+    fun removeLast(): Float = data[--size]
+
     fun toArray(): FloatArray = data.copyOf(size)
 }
 
@@ -260,47 +262,6 @@ object KeyDetector {
         }
         return if (dx == 0.0 || dy == 0.0) 0.0 else num / sqrt(dx * dy)
     }
-}
-
-enum class HarmonyMode(val label: String, val steps: Int, val octave: Int) {
-    THIRD_ABOVE("3ª acima", 2, 0),
-    THIRD_BELOW("3ª abaixo", -2, 0),
-    SIXTH_BELOW("6ª abaixo", 2, -12),
-    SIXTH_ABOVE("6ª acima", -2, 12),
-}
-
-/**
- * Builds a second voice by moving each melody note a diatonic third (or sixth)
- * inside the key, the way duets are usually arranged in popular music.
- */
-object Harmony {
-    fun voice(melody: List<NoteEvent>, key: Key, mode: HarmonyMode, octaveShift: Int = 0): List<NoteEvent> =
-        melody.map { NoteEvent(it.startMs, it.durMs, note(it.midi, key, mode.steps) + mode.octave + octaveShift) }
-
-    /** Moves [midi] by [steps] scale degrees within [key]; chromatic notes get a sensible third. */
-    fun note(midi: Int, key: Key, steps: Int): Int {
-        val scale = key.scale
-        val rel = Math.floorMod(midi - key.tonic, 12)
-        val degree = scale.indexOf(rel)
-        if (degree >= 0) {
-            val target = degree + steps
-            val octaves = Math.floorDiv(target, 7)
-            val idx = Math.floorMod(target, 7)
-            return midi + scale[idx] + 12 * octaves - scale[degree]
-        }
-        // Raised notes (leading tones, secondary dominants) take a minor third above;
-        // lowered notes (borrowed chords) take a major third above.
-        val raised = if (key.minor) rel in MINOR_RAISED else rel in MAJOR_RAISED
-        val third = when {
-            steps > 0 -> if (raised) 3 else 4
-            else -> if (raised) -4 else -3
-        }
-        val extraOctaves = if (steps > 0) (steps - 2) / 7 else (steps + 2) / 7
-        return midi + third + 12 * extraOctaves
-    }
-
-    private val MAJOR_RAISED = setOf(1, 6)
-    private val MINOR_RAISED = setOf(4, 6, 9, 11)
 }
 
 data class Phrase(val startMs: Int, val endMs: Int)

@@ -49,23 +49,23 @@ jobs:
         run: ./gradlew --no-daemon testReleaseUnitTest assembleRelease
 
       - name: Renomear APK
-        run: cp app/build/outputs/apk/release/app-release.apk Vox.apk
+        run: cp app/build/outputs/apk/release/app-release.apk Cantorial.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Vox-apk
-          path: Vox.apk
+          name: Cantorial-apk
+          path: Cantorial.apk
 
       - name: Publicar release
         if: github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.${{ github.run_number }}
-          name: Vox 1.0.${{ github.run_number }}
+          tag_name: v1.1.${{ github.run_number }}
+          name: Cantorial 1.1.${{ github.run_number }}
           target_commitish: ${{ github.sha }}
           make_latest: "true"
-          files: Vox.apk
+          files: Cantorial.apk
           body: |
-            Para instalar: abra esta página no celular, toque em **Vox.apk** e depois em "Instalar".
+            Para instalar: abra esta página no celular, toque em **Cantorial.apk** e depois em "Instalar".
             Se o Android pedir, permita instalar apps desta fonte (o navegador ou o gerenciador de arquivos).
             Versões novas instalam por cima da anterior, mantendo suas músicas.

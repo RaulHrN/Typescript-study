@@ -17,7 +17,7 @@ enum class Role {
     ACCOMP,
 }
 
-class TimedNote(val startMs: Int, val durMs: Int, val midi: Int, val role: Role) {
+class TimedNote(val startMs: Int, val durMs: Int, val midi: Int, val role: Role, val gain: Float = 1f) {
     val endMs: Int get() = startMs + durMs
 }
 
@@ -25,7 +25,7 @@ class Timeline(val notes: List<TimedNote>, val lengthMs: Int, val singStartMs: I
     val targets: List<TimedNote> = notes.filter { it.role == Role.TARGET }
 }
 
-enum class ExerciseKind { PATTERN, SUSTAIN, ECHO, BREATH }
+enum class ExerciseKind { PATTERN, SUSTAIN, ECHO, BREATH, BALANCE }
 
 class Exercise(
     val id: String,
@@ -34,87 +34,120 @@ class Exercise(
     val summary: String,
     val steps: List<String>,
     val kind: ExerciseKind = ExerciseKind.PATTERN,
-    /** Semitone offsets from the root (major scale based). */
+    /** Semitone offsets from the root (major scale based); [REST] is a pause. */
     val pattern: IntArray = intArrayOf(0),
     /** Beats per note; defaults to one beat each. */
     val beats: FloatArray? = null,
     val bpm: Int = 90,
     /** Fraction of each beat that sounds (1 = legato, 0.4 = staccato). */
     val legato: Float = 0.92f,
-    /** Diatonic steps for a second voice exercise (2 = third above, -2 = third below, 0 = none). */
-    val harmonySteps: Int = 0,
+    /** Second voice exercise: the singer sings this kind of second voice under the melody. */
+    val harmony: HarmonyMode? = null,
+    /** Backing vocal exercise: style, number of backing voices and the one the singer takes. */
+    val backing: BackingStyle? = null,
+    val backingVoices: Int = 1,
+    val backingPart: Int = 0,
     /** Semitones the root moves between repetitions. */
     val rootStep: Int = 1,
     val minutes: Int = 3,
     val needsHeadphones: Boolean = false,
-)
+) {
+    companion object {
+        const val REST = Int.MIN_VALUE
+    }
+}
+
+fun dbToGain(db: Float): Float = Math.pow(10.0, db / 20.0).toFloat()
 
 object ExerciseTimeline {
     private const val LEAD_IN_MS = 400
     private const val TAIL_MS = 700
 
-    fun build(ex: Exercise, root: Int): Timeline {
+    private class Line(val notes: List<NoteEvent>, val gain: Float, val target: Boolean)
+
+    /** Melody of a pattern exercise, starting at time 0. */
+    fun melody(ex: Exercise, root: Int): List<NoteEvent> {
         val beatMs = 60000f / ex.bpm
-        val key = Key(Math.floorMod(root, 12), false)
-        val melody = ArrayList<Pair<Float, Float>>() // start, duration in ms (relative)
+        val out = ArrayList<NoteEvent>()
         var t = 0f
         for (i in ex.pattern.indices) {
             val b = ex.beats?.getOrNull(i) ?: 1f
-            melody.add(t to b * beatMs)
+            if (ex.pattern[i] != Exercise.REST) {
+                out.add(NoteEvent(t.roundToInt(), (b * beatMs * ex.legato).roundToInt(), root + ex.pattern[i]))
+            }
             t += b * beatMs
         }
-        val phraseMs = t
+        return out
+    }
+
+    /**
+     * [range] is the singer's range, used by second voices and backing parts that follow the voice.
+     * [lead] is the lead singer's voice type in backing exercises (defaults to the singer's own).
+     */
+    fun build(ex: Exercise, root: Int, range: IntRange = root - 5..root + 19, lead: VoiceType? = null): Timeline {
+        val beatMs = 60000f / ex.bpm
+        val key = Key(Math.floorMod(root, 12), false)
         val notes = ArrayList<TimedNote>()
-
-        fun addPhrase(offset: Float, melodyRole: Role, harmonyRole: Role?) {
-            for (i in ex.pattern.indices) {
-                val (s, d) = melody[i]
-                val midi = root + ex.pattern[i]
-                val start = (offset + s).roundToInt()
-                val dur = (d * ex.legato).roundToInt()
-                notes.add(TimedNote(start, dur, midi, melodyRole))
-                if (harmonyRole != null && ex.harmonySteps != 0) {
-                    notes.add(TimedNote(start, dur, Harmony.note(midi, key, ex.harmonySteps), harmonyRole))
-                }
-            }
-        }
-
-        return when (ex.kind) {
+        when (ex.kind) {
             ExerciseKind.SUSTAIN -> {
                 notes.add(TimedNote(LEAD_IN_MS, 1500, root, Role.LISTEN))
                 val sing = LEAD_IN_MS + 1500 + 900
                 notes.add(TimedNote(sing, 5000, root, Role.TARGET))
-                Timeline(notes, sing + 5000 + TAIL_MS, sing)
+                return Timeline(notes, sing + 5000 + TAIL_MS, sing)
             }
             ExerciseKind.ECHO -> {
                 notes.add(TimedNote(LEAD_IN_MS, 1200, root, Role.LISTEN))
                 val sing = LEAD_IN_MS + 1200 + 700
                 notes.add(TimedNote(sing, 2500, root, Role.TARGET))
-                Timeline(notes, sing + 2500 + TAIL_MS, sing)
+                return Timeline(notes, sing + 2500 + TAIL_MS, sing)
             }
-            else -> {
-                if (ex.harmonySteps != 0) {
-                    addPhrase(LEAD_IN_MS.toFloat(), Role.LISTEN, Role.LISTEN)
-                    val sing = LEAD_IN_MS + phraseMs + 2 * beatMs
-                    addPhrase(sing, Role.ACCOMP, Role.TARGET)
-                    Timeline(notes, (sing + phraseMs).roundToInt() + TAIL_MS, sing.roundToInt())
-                } else {
-                    addPhrase(LEAD_IN_MS.toFloat(), Role.LISTEN, null)
-                    val sing = LEAD_IN_MS + phraseMs + 2 * beatMs
-                    addPhrase(sing, Role.TARGET, null)
-                    Timeline(notes, (sing + phraseMs).roundToInt() + TAIL_MS, sing.roundToInt())
+            ExerciseKind.BREATH, ExerciseKind.BALANCE -> return Timeline(notes, 0, 0)
+            ExerciseKind.PATTERN -> Unit
+        }
+
+        val melody = melody(ex, root)
+        val lines = ArrayList<Line>()
+        when {
+            ex.harmony != null -> {
+                lines.add(Line(melody, 1f, false))
+                lines.add(Line(Harmony.voice(melody, key, ex.harmony, range = range), 1f, true))
+            }
+            ex.backing != null -> {
+                val plan = Backing.arrange(melody, key, ex.backing, lead ?: VoiceType.classify(range.first, range.last), range, ex.backingVoices)
+                lines.add(Line(plan.lead, 1f, false))
+                val mine = ex.backingPart.coerceIn(0, (plan.parts.size - 1).coerceAtLeast(0))
+                plan.parts.forEachIndexed { i, part -> lines.add(Line(part.notes, dbToGain(part.gainDb), i == mine)) }
+            }
+            else -> lines.add(Line(melody, 1f, true))
+        }
+        var beatsTotal = 0f
+        for (i in ex.pattern.indices) beatsTotal += ex.beats?.getOrNull(i) ?: 1f
+        val patternMs = beatsTotal * beatMs
+        val contentMs = maxOf(patternMs, lines.maxOf { l -> l.notes.maxOfOrNull { it.endMs } ?: 0 }.toFloat())
+        val sing = LEAD_IN_MS + contentMs + 2 * beatMs
+        val singOnly = lines.size == 1
+        for (line in lines) {
+            for (n in line.notes) {
+                notes.add(TimedNote(LEAD_IN_MS + n.startMs, n.durMs, n.midi, Role.LISTEN, line.gain))
+                val role = if (line.target) Role.TARGET else Role.ACCOMP
+                if (!singOnly || line.target) {
+                    notes.add(TimedNote((sing + n.startMs).roundToInt(), n.durMs, n.midi, role, line.gain))
                 }
             }
         }
+        notes.sortBy { it.startMs }
+        return Timeline(notes, (sing + contentMs).roundToInt() + TAIL_MS, sing.roundToInt())
     }
 
-    /** Lowest and highest semitone offsets an exercise reaches (including the second voice). */
+    /** Lowest and highest semitone offsets an exercise reaches (including parallel second voices). */
     fun span(ex: Exercise): IntRange {
-        var lo = ex.pattern.min()
-        var hi = ex.pattern.max()
-        if (ex.harmonySteps != 0) {
-            // Diatonic thirds are at most 4 semitones away.
-            if (ex.harmonySteps > 0) hi += 4 else lo -= 4
+        val offsets = ex.pattern.filter { it != Exercise.REST }
+        var lo = offsets.minOrNull() ?: 0
+        var hi = offsets.maxOrNull() ?: 0
+        val h = ex.harmony
+        if (h != null && h.parallel) {
+            val shift = if (h.octave != 0) (if (h.steps > 0) -9 else 9) else (if (h.steps > 0) 4 else -4)
+            if (shift > 0) hi += shift else lo += shift
         }
         return lo..hi
     }

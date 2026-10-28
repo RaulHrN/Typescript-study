@@ -147,6 +147,20 @@ class Biquad private constructor(
     }
 
     companion object {
+        fun lowPass(sampleRate: Float, cutoff: Float, q: Float = 0.7071f): Biquad {
+            val w0 = 2.0 * PI * cutoff / sampleRate
+            val cw = cos(w0)
+            val alpha = sin(w0) / (2.0 * q)
+            val a0 = 1.0 + alpha
+            return Biquad(
+                b0 = ((1.0 - cw) / 2.0 / a0).toFloat(),
+                b1 = ((1.0 - cw) / a0).toFloat(),
+                b2 = ((1.0 - cw) / 2.0 / a0).toFloat(),
+                a1 = (-2.0 * cw / a0).toFloat(),
+                a2 = ((1.0 - alpha) / a0).toFloat(),
+            )
+        }
+
         fun highPass(sampleRate: Float, cutoff: Float, q: Float = 0.7071f): Biquad {
             val w0 = 2.0 * PI * cutoff / sampleRate
             val cw = cos(w0)

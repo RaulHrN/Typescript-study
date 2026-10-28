@@ -18,6 +18,7 @@ object Prefs {
     private val lowState = mutableIntStateOf(48)
     private val highState = mutableIntStateOf(67)
     private val measuredState = mutableStateOf(false)
+    private val leadLevelState = mutableFloatStateOf(Float.NaN)
 
     fun init(context: Context) {
         if (::sp.isInitialized) return
@@ -28,6 +29,7 @@ object Prefs {
         lowState.intValue = sp.getInt("low", 48)
         highState.intValue = sp.getInt("high", 67)
         measuredState.value = sp.getBoolean("measured", false)
+        leadLevelState.floatValue = sp.getFloat("leadLevel", Float.NaN)
         applyToEngine()
     }
 
@@ -67,6 +69,17 @@ object Prefs {
         measuredState.value = measured
         sp.edit().putInt("low", lo).putInt("high", hi).putBoolean("measured", measured).apply()
     }
+
+    /**
+     * Microphone level (dB) of the user singing at lead-voice volume. Backing levels are shown
+     * relative to it. NaN until calibrated.
+     */
+    var leadLevelDb: Float
+        get() = leadLevelState.floatValue
+        set(v) {
+            leadLevelState.floatValue = v
+            sp.edit().putFloat("leadLevel", v).apply()
+        }
 
     private fun applyToEngine() {
         MicEngine.a4 = a4

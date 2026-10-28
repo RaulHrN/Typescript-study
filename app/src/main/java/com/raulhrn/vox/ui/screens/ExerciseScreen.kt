@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -46,8 +47,12 @@ import com.raulhrn.vox.core.NoteNames
 import com.raulhrn.vox.core.Role
 import com.raulhrn.vox.core.Scorer
 import com.raulhrn.vox.core.Timeline
+import com.raulhrn.vox.core.VoiceType
 import com.raulhrn.vox.data.Prefs
+import com.raulhrn.vox.ui.BalanceMeter
 import com.raulhrn.vox.ui.Header
+import com.raulhrn.vox.ui.VoxButton
+import com.raulhrn.vox.ui.balanceHint
 import com.raulhrn.vox.ui.LevelBar
 import com.raulhrn.vox.ui.MicActive
 import com.raulhrn.vox.ui.MicGate
@@ -63,12 +68,13 @@ import com.raulhrn.vox.ui.Trace
 import com.raulhrn.vox.ui.Vox
 import com.raulhrn.vox.ui.VoxIcons
 import com.raulhrn.vox.ui.VoxType
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 @Composable
-fun ExerciseScreen(nav: Nav, id: String) {
+fun ExerciseScreen(nav: Nav, id: String, lead: VoiceType? = null) {
     val ex = remember(id) { Exercises.byId(id) }
     Column(Modifier.fillMaxSize().padding(horizontal = ScreenPadding)) {
         Header(ex?.title ?: "Exercício", onBack = { nav.pop() }, subtitle = ex?.category)
@@ -77,7 +83,11 @@ fun ExerciseScreen(nav: Nav, id: String) {
             return@Column
         }
         MicGate {
-            if (ex.kind == ExerciseKind.BREATH) BreathContent(ex) else PatternContent(ex)
+            when (ex.kind) {
+                ExerciseKind.BREATH -> BreathContent(ex)
+                ExerciseKind.BALANCE -> BalanceContent(ex)
+                else -> PatternContent(ex, lead)
+            }
         }
     }
 }
@@ -96,14 +106,14 @@ private fun rollNotes(tl: Timeline): List<RollNote> {
     return tl.notes.map {
         when (it.role) {
             Role.LISTEN -> RollNote(it.startMs, it.durMs, it.midi, RollKind.GUIDE)
-            Role.ACCOMP -> RollNote(it.startMs, it.durMs, it.midi, RollKind.MELODY)
+            Role.ACCOMP -> RollNote(it.startMs, it.durMs, it.midi, if (it.gain < 1f) RollKind.PART else RollKind.MELODY)
             Role.TARGET -> RollNote(it.startMs, it.durMs, it.midi, RollKind.TARGET, target++)
         }
     }
 }
 
 @Composable
-private fun PatternContent(ex: Exercise) {
+private fun PatternContent(ex: Exercise, lead: VoiceType?) {
     val c = Vox.colors
     val naming = Prefs.naming
     val low = Prefs.rangeLow
@@ -119,7 +129,8 @@ private fun PatternContent(ex: Exercise) {
     var guide by remember { mutableStateOf(false) }
     var phase by remember { mutableStateOf(Phase.IDLE) }
     var showSteps by remember { mutableStateOf(true) }
-    var timeline by remember { mutableStateOf(ExerciseTimeline.build(ex, roots.first())) }
+    val range = low..high
+    var timeline by remember { mutableStateOf(ExerciseTimeline.build(ex, roots.first(), range, lead)) }
     var scorer by remember { mutableStateOf(Scorer(timeline.targets)) }
     val guideTrack = remember { arrayOfNulls<SynthTrack>(1) }
     val results = remember { mutableStateListOf<Float>() }
@@ -134,16 +145,18 @@ private fun PatternContent(ex: Exercise) {
         try {
             while (rep < roots.size) {
                 val root = (roots[rep] + transpose).coerceIn(24, 96)
-                val tl = ExerciseTimeline.build(ex, root)
+                val tl = ExerciseTimeline.build(ex, root, range, lead)
                 val sc = Scorer(tl.targets)
                 timeline = tl
                 scorer = sc
                 trace.clear()
                 val listenEnd = tl.notes.filter { it.role == Role.LISTEN }.maxOfOrNull { it.endMs } ?: 0
-                val main = SynthTrack.ofTimed(tl.notes.filter { it.role != Role.TARGET }, gain = 0.3f)
+                // One track per loudness, so backing parts are heard at their recommended balance.
+                val heard = tl.notes.filter { it.role != Role.TARGET }.groupBy { it.gain }
+                    .map { (gain, notes) -> SynthTrack.ofTimed(notes, gain = 0.3f * gain) }
                 val g = SynthTrack.ofTimed(tl.targets, gain = 0.2f, bright = true).also { it.enabled = guide }
                 guideTrack[0] = g
-                synth.start(listOf(main, g), 0f)
+                synth.start(heard + g, 0f)
                 var lastFrame = MicEngine.frames
                 var done = false
                 while (!done) {
@@ -398,6 +411,168 @@ private fun BreathContent(ex: Exercise) {
 }
 
 private const val MIN_BREATH = 0.42f
+
+private val BALANCE_STEPS = listOf(
+    Triple("Backing", -6f, "Volume de harmonia: a melodia na frente, você logo atrás."),
+    Triple("Pad", -10f, "Bem suave, como um tapete de som em \"Uh\"."),
+    Triple("Resposta", -3f, "Quase no volume do regente: a resposta entra quando ele para."),
+)
+
+@Composable
+private fun BalanceContent(ex: Exercise) {
+    val c = Vox.colors
+    var step by remember { mutableIntStateOf(0) }
+    var recording by remember { mutableStateOf(false) }
+    var reference by remember { mutableFloatStateOf(Prefs.leadLevelDb) }
+    val relative = remember { mutableFloatStateOf(Float.NaN) }
+    val progress = remember { mutableFloatStateOf(0f) }
+
+    MicActive(enabled = recording || step in 1..BALANCE_STEPS.size)
+
+    LaunchedEffect(step, recording) {
+        if (step == 0 && !recording) return@LaunchedEffect
+        if (step > BALANCE_STEPS.size) return@LaunchedEffect
+        var lastFrame = MicEngine.frames
+        val voicedLevels = FloatList(256)
+        var smooth = Float.NaN
+        var lastVoicedMs = 0L
+        var held = 0f
+        var lastMs = withFrameMillis { it }
+        while (true) {
+            val done = withFrameMillis { now ->
+                val dt = (now - lastMs) / 1000f
+                lastMs = now
+                val f = MicEngine.frames
+                var i = max(lastFrame, f - 64)
+                var voiced = false
+                while (i < f) {
+                    val idx = MicEngine.index(i)
+                    if (!MicEngine.midi[idx].isNaN()) {
+                        val db = MicEngine.levelDb[idx]
+                        voicedLevels.add(db)
+                        smooth = if (smooth.isNaN()) db else smooth + (db - smooth) * 0.15f
+                        voiced = true
+                        lastVoicedMs = now
+                    }
+                    i++
+                }
+                lastFrame = f
+                if (now - lastVoicedMs > 500) smooth = Float.NaN
+                if (step == 0) {
+                    // About three seconds of singing at lead volume.
+                    progress.floatValue = (voicedLevels.size / 130f).coerceAtMost(1f)
+                    voicedLevels.size >= 130
+                } else {
+                    val target = BALANCE_STEPS[step - 1].second
+                    relative.floatValue = if (smooth.isNaN()) Float.NaN else smooth - reference
+                    if (voiced && abs(smooth - reference - target) <= 2.5f) held += dt
+                    progress.floatValue = (held / 2.5f).coerceAtMost(1f)
+                    held >= 2.5f
+                }
+            }
+            if (done) break
+        }
+        if (step == 0) {
+            val sorted = voicedLevels.toArray().also { it.sort() }
+            reference = sorted[sorted.size / 2]
+            Prefs.leadLevelDb = reference
+            recording = false
+        }
+        step++
+        progress.floatValue = 0f
+        relative.floatValue = Float.NaN
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        Panel {
+            for (s in ex.steps) {
+                Row(Modifier.padding(vertical = 3.dp)) {
+                    Text("•", style = VoxType.body, color = c.accent, modifier = Modifier.width(16.dp))
+                    Text(s, style = VoxType.small, color = c.text)
+                }
+            }
+        }
+        Spacer(Modifier.height(20.dp))
+        when {
+            step == 0 -> {
+                Text("1. Volume de regente", style = VoxType.title, color = c.text)
+                Text(
+                    "Cante \"aah\" numa nota confortável, forte e firme, como se fosse a voz principal.",
+                    style = VoxType.body,
+                    color = c.muted,
+                )
+                Spacer(Modifier.height(16.dp))
+                if (recording) {
+                    LinearProgressIndicator(
+                        progress = { progress.floatValue },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = c.accent,
+                        trackColor = c.surface2,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text("Ouvindo…", style = VoxType.small, color = c.muted)
+                }
+                Spacer(Modifier.weight(1f))
+                if (!recording) VoxButton("Gravar referência", { recording = true }, Modifier.fillMaxWidth(), icon = VoxIcons.Mic)
+            }
+            step <= BALANCE_STEPS.size -> {
+                val (name, target, hint) = BALANCE_STEPS[step - 1]
+                Text("${step + 1}. $name (${target.toInt()} dB)", style = VoxType.title, color = c.text)
+                Text(hint, style = VoxType.body, color = c.muted)
+                Spacer(Modifier.height(24.dp))
+                BalanceMeter({ relative.floatValue }, target)
+                Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                    Text("−18 dB", style = VoxType.small, color = c.faint, modifier = Modifier.weight(1f))
+                    Text("regente", style = VoxType.small, color = c.faint)
+                }
+                Spacer(Modifier.height(16.dp))
+                val rel = relative.floatValue
+                Text(
+                    if (rel.isNaN()) "—" else "%+.0f dB".format(rel),
+                    style = VoxType.display.copy(fontSize = VoxType.title.fontSize * 1.6f),
+                    color = if (!rel.isNaN() && abs(rel - target) <= 2.5f) c.accent else c.text,
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center,
+                )
+                Text(balanceHint(rel, target), style = VoxType.label, color = c.muted, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+                Spacer(Modifier.height(16.dp))
+                LinearProgressIndicator(
+                    progress = { progress.floatValue },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = c.accent,
+                    trackColor = c.surface2,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text("Segure na faixa por 2,5 segundos", style = VoxType.small, color = c.muted)
+                Spacer(Modifier.weight(1f))
+            }
+            else -> {
+                Text("Pronto!", style = VoxType.title, color = c.accent)
+                Text(
+                    "Você treinou os três níveis de backing. A sua referência de volume ficou salva e é usada no medidor de equilíbrio da prática de músicas.",
+                    style = VoxType.body,
+                    color = c.muted,
+                )
+                Spacer(Modifier.weight(1f))
+            }
+        }
+        if (step > 0) {
+            Text(
+                "Recomeçar",
+                style = VoxType.small,
+                color = c.muted,
+                modifier = Modifier
+                    .align(Alignment.CenterHorizontally)
+                    .clickable {
+                        step = 0
+                        recording = false
+                    }
+                    .padding(12.dp),
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+    }
+}
 
 /** Judges how even the "sss" was from the spread of the input level. */
 private fun steadiness(levels: FloatList): String {

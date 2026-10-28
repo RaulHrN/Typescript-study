@@ -109,7 +109,7 @@ object MicEngine {
         frames++ // volatile write publishes the slot to readers
     }
 
-    private class Worker : Thread("vox-mic") {
+    private class Worker : Thread("cantorial-mic") {
         @Volatile
         var alive = true
 

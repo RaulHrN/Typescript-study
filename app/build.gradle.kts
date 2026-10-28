@@ -14,11 +14,12 @@ android {
     compileSdk = 35
 
     defaultConfig {
+        // Kept from the app's first name (Vox) so new builds install over existing ones.
         applicationId = "com.raulhrn.vox"
         minSdk = 26
         targetSdk = 35
         versionCode = buildNumber
-        versionName = "1.0.$buildNumber"
+        versionName = "1.1.$buildNumber"
     }
 
     signingConfigs {

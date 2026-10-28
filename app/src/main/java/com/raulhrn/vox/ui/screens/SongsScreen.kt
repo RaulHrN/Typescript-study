@@ -41,17 +41,17 @@ fun SongsScreen(nav: Nav) {
         if (SongStore.loaded.value && SongStore.songs.isEmpty()) {
             item {
                 Panel {
-                    Text("Aprenda a fazer segunda voz", style = VoxType.heading, color = c.text)
+                    Text("Segunda voz e backing vocal", style = VoxType.heading, color = c.text)
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "Adicione uma música e o Vox encontra a melodia, descobre o tom e cria a segunda voz em terças ou sextas. " +
-                            "Depois é só ouvir, cantar junto e acompanhar a sua afinação na tela.",
+                        "Adicione uma música e o Cantorial separa a voz do instrumental, encontra a melodia, descobre o tom e escreve a " +
+                            "segunda voz ou o backing vocal para a sua voz. Depois é só ouvir, cantar junto e acompanhar a afinação.",
                         style = VoxType.small,
                         color = c.muted,
                     )
                     Spacer(Modifier.height(12.dp))
                     for (line in listOf(
-                        "Arquivo de áudio: melhor com voz em destaque ou a cappella.",
+                        "Arquivo de áudio: a música completa; o app isola o que é cantado.",
                         "Cantando: você canta a melodia e o app transcreve.",
                         "Digitando: escreva as notas, como \"Dó Ré Mi:2\".",
                     )) {
@@ -68,7 +68,7 @@ fun SongsScreen(nav: Nav) {
         items(SongStore.songs, key = { it.id }) { song ->
             ListRow(
                 song.title,
-                "${song.key.label(naming)} · ${song.mode.label}",
+                "${song.key.label(naming)} · " + if (song.backingMode) "Backing: ${song.backingStyle.label}" else song.mode.label,
                 formatTime(song.durationMs.toFloat()),
             ) { nav.push(Route.Practice(song.id)) }
         }
